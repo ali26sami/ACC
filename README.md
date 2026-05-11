@@ -1,68 +1,79 @@
 # Cross-topic Argument Mining with RoBERTa
 
 Re-implementation of Stab et al. (EMNLP 2018), *Cross-topic Argument Mining
-from Heterogeneous Sources*, replacing the **Contextual BiLSTM (biclstm)**
-with **RoBERTa**.
+from Heterogeneous Sources*, with **RoBERTa replacing the Contextual BiLSTM
+(BiCLSTM)**.
 
 The paper integrates the topic vector into the i- and c-gates of an LSTM
-cell so the encoder is topic-aware. In a transformer, the analogous design
-is to feed the topic and the candidate sentence as a **sentence pair**
-(`<s> topic </s></s> sentence </s>`). Topic information then conditions the
-sentence representation via cross-token self-attention inside RoBERTa.
+cell to make the encoder topic-aware. The RoBERTa analogue is a sentence-pair
+input — `<s> topic </s></s> sentence </s>` — so cross-token self-attention
+inside the transformer conditions sentence tokens on topic tokens.
 
-Everything else follows the paper:
+Two model variants are provided, matching the paper:
 
-- **Dataset**: UKP Sentential Argument Mining corpus (8 topics, 25,492
-  sentences).
-- **Setups**:
-  - 2-label: `argument` vs `non-argument`
-  - 3-label: `supporting argument` / `opposing argument` / `non-argument`
-- **Protocol**: cross-topic — hold one topic out as test, train on the
-  remaining 7; report mean ± std over 10 seeds.
-- **Metrics**: macro-F1; precision/recall for the argument class(es)
-  (`P_arg`, `R_arg`, or `P_arg+`, `P_arg-`, `R_arg+`, `R_arg-`).
-- **Training**: AdamW, cross-entropy, 10 epochs, best model by validation
-  loss (10% of train), max sequence length 128.
+| Variant     | Paper model                 | Description |
+|-------------|-----------------------------|-------------|
+| single-task | `biclstm`                   | RoBERTa fine-tuned on UKP only. |
+| MTL         | `mtl+biclstm+dip2016`       | Shared RoBERTa encoder + private head for UKP + private head for DIP2016 relevance, alternating-epoch training. |
 
-## Data
+Both 2-label (argument / non-argument) and 3-label (supporting / opposing
+/ non-argument) setups, cross-topic protocol (hold one topic out for test),
+mean ± std over multiple seeds, macro-F1 + P_arg / R_arg metrics — same
+as Table 4 of the paper.
 
-Download the UKP corpus
-(https://tudatalib.ulb.tu-darmstadt.de/handle/tudatalib/2345) and place the
-per-topic TSV files under `data/ukp/`:
+## Running on Google Colab
 
+Open `notebooks/roberta_argmining_colab.ipynb`. It contains:
+
+1. Drive mount
+2. Dependency install
+3. Repo clone
+4. **A single config cell** with every path, hyperparameter, and seed
+5. Data sanity check
+6. Smoke-test run
+7. Full grid (resumable — cached JSONs are skipped)
+8. Summary inspection
+
+Set these in the config cell to point at your Drive files:
+
+```python
+UKP_CSV    = DRIVE_ROOT / 'UKP' / 'ukp_sentential_argument_mining.csv'
+DIP_DIR    = DRIVE_ROOT / 'DIP2016'        # 50 XML files
+OUTPUT_DIR = DRIVE_ROOT / 'roberta_argmining_runs'
 ```
-data/ukp/abortion.tsv
-data/ukp/cloning.tsv
-data/ukp/death_penalty.tsv
-data/ukp/gun_control.tsv
-data/ukp/marijuana_legalization.tsv
-data/ukp/minimum_wage.tsv
-data/ukp/nuclear_energy.tsv
-data/ukp/school_uniforms.tsv
+
+Per-run JSONs and `summary.json` are written to `OUTPUT_DIR` on Drive.
+
+## Data formats
+
+**UKP** — single CSV with columns:
+`topic, retrievedUrl, archivedUrl, sentenceHash, sentence, annotation, set`
+where `annotation ∈ {NoArgument, Argument_for, Argument_against}` and
+`set ∈ {train, val, test}`.
+
+**DIP2016** — folder of per-query XML files of shape:
+```xml
+<singleQueryResults queryID="...">
+  <documents>
+    <document clueWebID="...">
+      <sentences>
+        <s relevant="true|false"><content>...</content></s>
+        ...
 ```
+The XMLs only carry `queryID`, not the query text. Supply an optional
+`queryID,query_text` CSV to use real query strings in the MTL head; otherwise
+the queryID is used as the topic text segment.
 
-Each TSV is the official release with columns `topic`, `retrievedUrl`,
-`archivedUrl`, `sentenceHash`, `sentence`, `annotation`, `set` (the `set`
-column gives the official train/val/test split per topic).
-
-## Install
+## Local CLI (optional)
 
 ```bash
 pip install -r requirements.txt
+
+# Single run
+python -m src.train --ukp_csv data/ukp.csv --test_topic "gun control" --labels 2 --seed 0
+# Same, with MTL+DIP2016
+python -m src.train --ukp_csv data/ukp.csv --dip_dir data/dip2016 --test_topic "gun control" --labels 2 --seed 0 --mtl
+
+# Full grid
+python -m src.run_all --ukp_csv data/ukp.csv --dip_dir data/dip2016 --output_dir results
 ```
-
-## Run
-
-Single held-out topic, one seed:
-
-```bash
-python -m src.train --test_topic "gun control" --labels 2 --seed 0
-```
-
-Full paper protocol (all 8 topics × 10 seeds, both 2- and 3-label):
-
-```bash
-python -m src.run_all
-```
-
-Results are written to `results/`.
